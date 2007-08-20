@@ -1,0 +1,10 @@
+This is a mirror of http://www.vim.org/scripts/script.php?script_id=1997
+
+Undo branches are a very cool feature in vim7, which I recently discovered.
+You can navigate through the change history of the current session as
+long as you do not run out of undolevels.
+
+This small plugin lets you:
+-  Assign tags / names and description to points in the buffers change history
+-  List the tags / names
+-  Choose a tag / name to revert back
