@@ -43,7 +43,7 @@ func! s:UndoTagBranch( bang, name, ...)
     return
   endif
   let b:undo_tags[a:name]= undos[-1]
-  let b:undo_tags[a:name].time = strftime("%T")
+  let b:undo_tags[a:name].time = strftime("%H:%M:%S")
   let b:undo_tags[a:name].description = join(a:000," ")
   call s:UndoListTags({ a:name : b:undo_tags[a:name] })
 endfun
