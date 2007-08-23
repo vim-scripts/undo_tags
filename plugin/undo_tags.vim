@@ -1,113 +1,159 @@
-if exists("loaded_undo_tag")
+" Vim plugin -- bookmarks for undo states
+" Version      : 1.1
+" Last change  : 08/23/07
+" Maintainer   : A.Politz <politza@fh-trier.de>
+" Contributors : Andy Wokula
+
+if exists("loaded_undo_tags")
   finish
 endif
-let loaded_undo_tag=1
+let loaded_undo_tags=1
+
+if v:version < 700 
+  redraw | echohl Error | echo "undo_tags : You need at least vim7 for this plugin." | echohl None
+  finish
+endif
+
 let s:cpo=&cpo
-set cpo-=C
+set cpo&vim
 
-augroup undo_tags
-  au!
-  au BufEnter * if !exists('b:undo_tags') | :let b:undo_tags = {} | endif
-augroup END
-
-func! s:GetUndoList( )
+func! s:UTGetUndoList( )
   "There is no func for this.
-  let tmp = tempname()
-  exec "redir > ".tmp
-  silent undol
+  redir => strundolist
+  silent undolist
   redir END
-  let undo_list=readfile(tmp)
-  "First line is always empty
-  if len(undo_list) <= 2
-    return {}
-  endif
+  let undo_list = split(strundolist, "\n")
   let res = []
-  for b in undo_list[2:]
-    let number = matchstr(b,'^\s*\zs\d\+\ze')+0
-    let changes = matchstr(b,'^\s*\d\+\s\+\zs\d\+\ze')+0
-    let time = matchstr(b,'^\s*\%(\d\+\s\+\)\{2}\zs.*')
-    call add(res,{'number' : number , 'changes' : changes , 'time' : time  })
+  for str in undo_list
+    if str !~ '\d' | continue | endif
+    let branch = {}
+    call add(res, branch)
+    let [ n,c,t ] =  matchlist(str, '\(\d\+\)  *\(\d\+\)  *\(\S.*\)')[1:3]
+    let [branch.number, branch.changes, branch.time] = [n+0,c+0,t]
   endfor
   return res
 endfun
 
+func! s:UTGetBufTags()
+  if !exists("b:undo_tags")
+    let b:undo_tags = {}
+  endif
+  return b:undo_tags
+  " this returns a ref, not a copy
+endfunc
 
-func! s:UndoTagBranch( bang, name, ...)
-  let undos = s:GetUndoList()
-  if empty(undos) 
-    redraw | echo "Nothing to undo."
+func! s:UTMark( bang, name, ...)
+  if changenr() == 0
+    echo "Sorry, you can't mark a virgin buffer. See help for an alternative."
     return
   endif
-  if has_key(b:undo_tags,a:name) && a:bang !~ "!"
-    echohl Error | echo "Tag already exists. Add ! to overwrite it." | echohl None
+  let undo_tags=s:UTGetBufTags()
+  if has_key(undo_tags,a:name) && !a:bang
+    echohl Error | echo "Tag '".a:name."' already exists. Add ! to overwrite it." | echohl None
     return
   endif
-  let b:undo_tags[a:name]= undos[-1]
-  let b:undo_tags[a:name].time = strftime("%H:%M:%S")
-  let b:undo_tags[a:name].description = join(a:000," ")
-  call s:UndoListTags({ a:name : b:undo_tags[a:name] })
+  let changes = "n/a"
+  for e in s:UTGetUndoList()
+    if e.number == changenr()
+      let changes=e.changes
+      break
+    endif
+  endfor
+
+  let tagdata = {}
+  let undo_tags[a:name] = tagdata
+  let tagdata.number = changenr()+0
+  let tagdata.changes = changes
+  let tagdata.time = strftime("%H:%M:%S")
+  let tagdata.description = join(a:000," ")
+  call s:UTList({ a:name : tagdata })
 endfun
 
-func! s:UndoGotoTag( name )
-  if !has_key(b:undo_tags,a:name)
+func! s:UTRestore( name )
+  let undo_tags=s:UTGetBufTags()
+  if !has_key(undo_tags,a:name)
     echohl Error|echo "No such tag : ".a:name |echohl None
     return
   endif
-  exec ":undo ".b:undo_tags[a:name].number
+  try
+    exec ":undo ".undo_tags[a:name].number
+  catch /.*/	"No error code for this atm.
+    echohl Error|echo "Sorry, you ran out of 'undolevels'. Deleting tag '".a:name."'." |echohl None
+    call remove(undo_tags,a:name)
+  endtry
 endfun
 
-func! s:UndoListTags( hash, ...)
-  let order_by = 
-        \!a:0 ? "number"                       :
-        \a:1=="tag"         ? "tag"         : 
-        \a:1=="time"        ? "time"        : 
-        \a:1=="number"      ? "number"      : 
-        \a:1=="changes"     ? "changes"     : 
-        \a:1=="description" ? "description" : 
-	\"number"
-  
-  let tag_h           = "tag           "
-  let tag_h           = "tag           "
-  let tag_h           = "tag           "
+func! s:UTDelete( pat )
+  let undo_tags=s:UTGetBufTags()
+  let len=len(undo_tags)
+  let pat = '^'.a:pat.'$'
+  try
+    call filter(undo_tags,'v:key !~ pat')
+  catch /.*/ "Catch invalid pattern
+    echohl Error | echo v:exception | echohl None
+  endtry
+  let deleted = len-len(undo_tags)
+  echo "Removed ".deleted." tag". ( deleted != 1 ? "s." : ".")
+endfun
+
+func! s:UTList( tag_hash, ...)
+  let order_by =  a:0 && a:1 =~ '^\%(tag\|time\|number\|changes\|description\)$' ? a:1 : 'time'
+
+  let tag_h           = "tag            "
   let number_h        = "number    "
   let changes_h       = "changes   "
-  let time_h          = "time            "
+  let time_h          = "time       "
   let description_h   = "description"
-  redraw | echohl Question | echo tag_h.number_h.changes_h.time_h.description_h |  echohl None
-  
-  let s:order_by = order_by
-  let s:hash = a:hash
-  func! s:SortTags(k1,k2)
-    return s:hash[a:k1][s:order_by] < s:hash[a:k2][s:order_by]?-1:s:hash[a:k1][s:order_by] > s:hash[a:k2][s:order_by]?1:0
-  endfun
+  redraw | echohl Title | echo tag_h.number_h.changes_h.time_h.description_h |  echohl None
 
-  for e in (order_by=="tag" ? sort(keys(a:hash)): sort(keys(a:hash),"s:SortTags"))
-    let c = b:undo_tags[e].changes
-    let n = b:undo_tags[e].number
-    let d = b:undo_tags[e].description
-    let t = b:undo_tags[e].time
+  for e in s:UTSortTagKeys(a:tag_hash,order_by)
+    let c = a:tag_hash[e].changes
+    let n = a:tag_hash[e].number
+    let d = a:tag_hash[e].description
+    let t = a:tag_hash[e].time
+    "let e = len(e) <= len(tag_h) ? e : strpart(e,0,len(tag_h)-4).'...'
 
-    echo e.repeat(" ",len(tag_h)-len(e))
-	  \.n.repeat(" ",len(number_h)-len(n))
-	  \.c.repeat(" ",len(changes_h)-len(c))
-	  \.t.repeat(" ",len(time_h)-len(t))
-	  \.d
+    echo e.repeat(" ",max([1,len(tag_h)-len(e)]))
+          \.n.repeat(" ",len(number_h)-len(n))
+          \.c.repeat(" ",len(changes_h)-len(c))
+          \.t.repeat(" ",len(time_h)-len(t))
+          \.d
   endfor
-  unlet s:hash
-  unlet s:order_by
 endfun
 
-func! s:UndoListComplete(a,b,c)
-  return "tag\ndescription\ntime\nnumber\nchanges\n"
+func! s:_UTCompareTags(k1, k2)
+  return s:hash[a:k1][s:order_by] < s:hash[a:k2][s:order_by]
+        \ ? -1
+        \ : s:hash[a:k1][s:order_by] > s:hash[a:k2][s:order_by]
 endfun
 
-func! s:UndoTagComplete(a,b,c)
-  return join(keys(b:undo_tags),"\n")
+func! s:UTSortTagKeys( tag_hash, order_by)
+  if a:order_by=="tag" 
+    return sort(keys(a:tag_hash))
+  else
+    let s:order_by = a:order_by
+    let s:hash = a:tag_hash
+    return sort(keys(a:tag_hash),"s:_UTCompareTags")
+    unlet s:hash
+    unlet s:order_by
+  endif
 endfun
 
-comm! -nargs=1 -complete=custom,s:UndoTagComplete UTGotoTag :call s:UndoGotoTag(<q-args>)
-comm! -nargs=+ -bang -complete=custom,s:UndoTagComplete UTMakeTag :call s:UndoTagBranch("<bang>",<f-args>)
-comm! -nargs=? -complete=custom,s:UndoListComplete UTListTags :call s:UndoListTags(b:undo_tags,<q-args>) 
+func! s:UTCompleteHeader(a,b,c)
+  return "tag\nchanges\nnumber\ndescription\ntime"
+endfun
+
+func! s:UTCompleteTags(a,b,c)
+  return join(keys(s:UTGetBufTags()),"\n")
+endfun
+
+
+comm! -nargs=1 -complete=custom,s:UTCompleteTags UTRestore :call s:UTRestore(<q-args>)
+comm! -nargs=1 -complete=custom,s:UTCompleteTags UTDelete :call s:UTDelete(<q-args>)
+comm! -nargs=+ -bang -complete=custom,s:UTCompleteTags UTMark :call s:UTMark(<bang>0,<f-args>)
+comm! -nargs=? -complete=custom,s:UTCompleteHeader UTList :call s:UTList(s:UTGetBufTags(),<q-args>) 
 
 let &cpo=s:cpo
 unlet s:cpo
+
+" vim:sts=2:sw=2:et:fdl=0:fdm=expr:fde=getline(v\:lnum)=~'^fun'?"a1"\:getline(v\:lnum-1)=~'^endf'?"<1"\:"="
